@@ -1,0 +1,13 @@
+{
+    "project_name": "name of your project",
+    "amount": 50,
+    "description": "description of your collection",
+
+    "api_key": "your secret access token",
+
+    "folders": [
+        "background 1",
+        "body 2",
+        "eyes 3"
+    ]
+}
