@@ -16,7 +16,7 @@ Utility for creating a generative art collection from supplied image layers, esp
 ## How to use
 1. Get an API key from [Pinata](https://app.pinata.cloud/keys).
 2. Go to ``config.json`` and put the JWT (Secret access token) in ``api_key``.
-3. Adapt the config to your liking and make sure there is a sequencial number at the beginning of each folder to represent the order of layers.
+3. Adapt the config to your liking and make sure there is a sequential number at the beginning of each folder to represent the order of layers.
 4. Run ``main.py``.
 
 ## File structure
