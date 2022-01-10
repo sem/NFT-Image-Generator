@@ -19,7 +19,6 @@ UPLOAD_JSON_URL = 'https://api.pinata.cloud/pinning/pinJSONToIPFS'
 base_dir = os.path.dirname(os.path.abspath(__file__))
 http = Session()
 
-
 class Config():
     def __init__(self, filename):
         self.filename = filename
@@ -37,10 +36,8 @@ class Config():
                 self.data = json.load(conf)
         return self.data.get(key)
 
-
 CONFIG = Config(os.path.join(base_dir, 'config.json'))
 HEADERS = {'Authorization': f'Bearer {CONFIG["api_key"]}'}
-
 
 def set_up():
     num_files_list = []
@@ -74,9 +71,8 @@ def set_up():
                'red')
         return False
 
-    cprint(f"Successfully created {CONFIG['amount']} images", 'green')
+    cprint(f"Creating {CONFIG['amount']} images, please wait...", 'yellow')
     return True
-
 
 def get_items():
     p = list(product(*[os.listdir(os.path.join(base_dir, folder))
@@ -170,12 +166,13 @@ def create_image(image_items, num):
                 new_image = Image.new(mode='RGBA', size=img.size)
             new_image.paste(img, (0, 0), mask=img)
             attr_data = {
-                'trait_value': ' '.join(folder.split(' ')[:-1]).capitalize(),
+                'trait_value': ' '.join(folder.split(' ')[-1:]).capitalize(),
                 'value': os.path.splitext(image)[0]
             }
             attributes.append(attr_data)
 
     new_image.save(os.path.join(base_dir, 'output', 'images', f'{num}.png'))
+    print(f'+ {num}.png, {num}.json')
 
     img_metadata = {
         'description': CONFIG['description'],
@@ -191,19 +188,19 @@ def create_image(image_items, num):
     new_image.save(buffer, format='PNG')
     return img_metadata, buffer
 
-
 def upload(file_list, metadata, desc=None):
-    """Upload files and its metadata"""
+    """Upload files and its metadata to Pinata"""
 
-    cprint(f'Uploading {desc}', 'green')
+    cprint(f'Uploading {desc}, please wait...', 'yellow')
     try:
         resp = http.post(
             UPLOAD_URL,
             files=file_list,
             headers=HEADERS,
             json={'pinataMetadata': json.dumps(metadata)},
-            timeout=10.0
+            timeout=300.0
         )
+        # Increase timeout in case the connection gets aborted (TimeoutError)
         resp.raise_for_status()
         result = resp.json()
         return result
@@ -214,7 +211,6 @@ def upload(file_list, metadata, desc=None):
             cprint(f'HTTP ERROR: {exc}', 'red')
     except Exception as exc:
         cprint(f'ERROR: {exc}', 'red')
-
 
 if __name__ == '__main__':
     if set_up():

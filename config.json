@@ -6,8 +6,12 @@
     "api_key": "your secret access token",
 
     "folders": [
-        "background 1",
-        "body 2",
-        "eyes 3"
+        "1 background",
+        "2 body",
+        "3 eyes"
+    ],
+
+    "ignore": [
+        ".DS_Store"
     ]
 }
