@@ -72,7 +72,7 @@ def set_up():
         return False
 
     cprint(f"Creating {CONFIG['amount']} images, please wait...", 'yellow')
-    return True
+    return True, possible_combinations
 
 def get_items():
     p = list(product(*[os.listdir(os.path.join(base_dir, folder))
@@ -212,7 +212,18 @@ def upload(file_list, metadata, desc=None):
     except Exception as exc:
         cprint(f'ERROR: {exc}', 'red')
 
+def profile_picture_gif():
+    frames, images = ([] for i in range(2))
+    for image in os.listdir(os.path.join(base_dir, 'output', 'images'))[:CONFIG['profile_images']]:
+        images.append(os.path.join(base_dir, 'output', 'images', image))
+    
+    for frame in images:
+        new_frame = Image.open(frame)
+        frames.append(new_frame)
+    
+    frames[0].save(os.path.join(base_dir, 'output', 'profile.gif'), format='GIF', append_images=frames[1:], save_all=True, duration=230, loop=0)
+
 if __name__ == '__main__':
     if set_up():
         get_items()
-
+        profile_picture_gif()
