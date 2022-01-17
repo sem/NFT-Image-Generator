@@ -19,6 +19,7 @@ UPLOAD_JSON_URL = 'https://api.pinata.cloud/pinning/pinJSONToIPFS'
 base_dir = os.path.dirname(os.path.abspath(__file__))
 http = Session()
 
+
 class Config():
     def __init__(self, filename):
         self.filename = filename
@@ -36,8 +37,11 @@ class Config():
                 self.data = json.load(conf)
         return self.data.get(key)
 
+
 CONFIG = Config(os.path.join(base_dir, 'config.json'))
 HEADERS = {'Authorization': f'Bearer {CONFIG["api_key"]}'}
+IGNORED = CONFIG['ignore'] or []
+
 
 def set_up():
     num_files_list = []
@@ -51,6 +55,12 @@ def set_up():
         os.makedirs(current_path, exist_ok=True)
 
         num_files = len(os.listdir(current_path))
+        for ignored in IGNORED:
+            if os.path.exists(os.path.join(current_path, ignored)):
+                num_files -= 1
+        if num_files <= 0:
+            # Prevent num_files <= 0
+            num_files = 1
         m *= num_files
         num_files_list.append(num_files)
         print(f'{current_path} contains {num_files} file(s)')
@@ -71,12 +81,25 @@ def set_up():
                'red')
         return False
 
-    cprint(f"Creating {CONFIG['amount']} images, please wait...", 'yellow')
-    return True, possible_combinations
+    return True
 
-def get_items():
-    p = list(product(*[os.listdir(os.path.join(base_dir, folder))
-                       for folder in CONFIG['folders']]))
+
+def set_list():
+    # p = list(product(*[os.listdir(os.path.join(base_dir, folder))
+    #                    for folder in CONFIG['folders']]))
+    # Image: counter
+    image_counter = {}
+    p = []
+    for folder in CONFIG['folders']:
+        file_list = []
+        for file in os.listdir(os.path.join(base_dir, folder)):
+            if file not in IGNORED:
+                file_list.append(file)
+                # Image name, minus file extensions (e.g. png)
+                img_name = file.split('.')[0]
+                image_counter[img_name] = 0
+        p.append(file_list)
+    p = list(product(*p))
 
     name = CONFIG['project_name']
 
@@ -85,6 +108,10 @@ def get_items():
     for num in range(CONFIG['amount']):
         idx = random.randint(0, len(p) - 1)
         item = [[f, p[idx][i]] for i, f in enumerate(CONFIG['folders'])]
+        for i in item:
+            # Image name, minus file extensions (e.g. png)
+            key = i[-1].split('.')[0]
+            image_counter[key] += 1
         img_metadata, buffer = create_image(item, num)
 
         img_metadata['num'] = num
@@ -95,8 +122,37 @@ def get_items():
         images_data[img_metadata['name']] = img_metadata
         p.pop(idx)
 
-    description = CONFIG['description']
+    # Count all image rarities
+    cprint('\nImage rarity', attrs=['bold'])
+    counter = 0
+    sum_perc = 0.0
+    for img, num_count in image_counter.items():
+        # if counter == 0:
+        perc = round((num_count / CONFIG['amount']) * 100, 2)
+        sum_perc += perc
+        counter += 1
+        cprint(f'{img:20}: {perc:02}%')
 
+    # Count mean of rarity with 2 decimal point
+    img_rarity_perc = round(sum_perc / counter, 2)
+    cprint(f'Average rarity: {img_rarity_perc}\n', attrs=['bold'])
+
+    # Update images output metadata
+    # Mean of Images Rarity for Image result
+    for img_name, desc in images_data.items():
+        sum_num_count = 0
+        attributes = desc['attributes']
+        for attr in attributes:
+            num_count = image_counter[attr['value']]
+            sum_num_count += num_count
+        
+        mean_perc_rarity = round(
+            sum_num_count / len(attributes) / CONFIG['amount'] * 100, 2
+        )
+        # Add rarity value here
+        images_data[img_name]['rarity'] = mean_perc_rarity
+
+    description = CONFIG['description']
     count, response = 0, None
     while count <= 3:
         response = upload(image_files, metadata={
@@ -126,6 +182,7 @@ def get_items():
         # Encoded URL of the image
         desc['image'] = ipfs_url + '/' + quote(img_name + '.png')
         desc['date'] = int(timestamp.timestamp() * 1000)
+        # Image rarity
 
         img_num = desc["num"]
         desc_copy = desc.copy()
@@ -157,6 +214,7 @@ def get_items():
         cprint(f'JSON upload response: {json.dumps(response, indent=2)}',
                'green')
 
+
 def create_image(image_items, num):
     attributes = []
     new_image = None
@@ -166,13 +224,13 @@ def create_image(image_items, num):
                 new_image = Image.new(mode='RGBA', size=img.size)
             new_image.paste(img, (0, 0), mask=img)
             attr_data = {
-                'trait_value': ' '.join(folder.split(' ')[-1:]).capitalize(),
+                'trait_value': ' '.join(folder.split(' ')[:-1]).capitalize(),
                 'value': os.path.splitext(image)[0]
             }
             attributes.append(attr_data)
 
     new_image.save(os.path.join(base_dir, 'output', 'images', f'{num}.png'))
-    print(f'+ {num}.png, {num}.json')
+    print(f'Image: {num}')
 
     img_metadata = {
         'description': CONFIG['description'],
@@ -188,19 +246,19 @@ def create_image(image_items, num):
     new_image.save(buffer, format='PNG')
     return img_metadata, buffer
 
-def upload(file_list, metadata, desc=None):
-    """Upload files and its metadata to Pinata"""
 
-    cprint(f'Uploading {desc}, please wait...', 'yellow')
+def upload(file_list, metadata, desc=None):
+    """Upload files and its metadata"""
+
+    cprint(f'Uploading {desc}', 'green')
     try:
         resp = http.post(
             UPLOAD_URL,
             files=file_list,
             headers=HEADERS,
             json={'pinataMetadata': json.dumps(metadata)},
-            timeout=300.0
+            timeout=100.0
         )
-        # Increase timeout in case the connection gets aborted (TimeoutError)
         resp.raise_for_status()
         result = resp.json()
         return result
@@ -212,18 +270,21 @@ def upload(file_list, metadata, desc=None):
     except Exception as exc:
         cprint(f'ERROR: {exc}', 'red')
 
+
 def profile_picture_gif():
     frames, images = ([] for i in range(2))
     for image in os.listdir(os.path.join(base_dir, 'output', 'images'))[:CONFIG['profile_images']]:
         images.append(os.path.join(base_dir, 'output', 'images', image))
-    
+
     for frame in images:
         new_frame = Image.open(frame)
         frames.append(new_frame)
-    
-    frames[0].save(os.path.join(base_dir, 'output', 'profile.gif'), format='GIF', append_images=frames[1:], save_all=True, duration=230, loop=0)
+
+    frames[0].save(os.path.join(base_dir, 'output', 'profile.gif'), format='GIF', append_images=frames[1:],
+                   save_all=True, duration=230, loop=0)
+
 
 if __name__ == '__main__':
     if set_up():
-        get_items()
+        set_list()
         profile_picture_gif()
