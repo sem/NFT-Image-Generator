@@ -43,4 +43,4 @@ NFT-Image-Generator/
 - [x] Automatically uploads images and metadata to [Pinata](https://www.pinata.cloud).
 - [x] Ensures that no duplicate images will appear in the collection.
 - [x] Creates a .GIF profile picture for your collection.
-- [x] Giving each image a rarity value. 
+- [x] Gives each image a rarity value. 
