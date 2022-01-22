@@ -2,25 +2,26 @@ import json
 import os
 import shutil
 import random
+import urllib.parse as up
 from datetime import datetime
 from io import BytesIO
-from itertools import product, combinations
-from urllib.parse import quote
+from itertools import product
+from typing import Optional, Dict, List
 
 from PIL import Image
-from termcolor import colored, cprint
+from termcolor import cprint
 from requests.sessions import Session
 from requests.exceptions import HTTPError
 
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATETIME_FMT = '%Y-%m-%dT%H:%M:%S.%fZ'
 UPLOAD_URL = 'https://api.pinata.cloud/pinning/pinFileToIPFS'
 UPLOAD_JSON_URL = 'https://api.pinata.cloud/pinning/pinJSONToIPFS'
-
-base_dir = os.path.dirname(os.path.abspath(__file__))
-http = Session()
+UA_HEADER = 'Mozilla/5.0 (X11; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0'
 
 
-class Config():
+class Config:
     def __init__(self, filename):
         self.filename = filename
         self.data = None
@@ -38,253 +39,390 @@ class Config():
         return self.data.get(key)
 
 
-CONFIG = Config(os.path.join(base_dir, 'config.json'))
-HEADERS = {'Authorization': f'Bearer {CONFIG["api_key"]}'}
-IGNORED = CONFIG['ignore'] or []
+class ImageSource:
+    """Hold Image source data"""
+
+    def __init__(self, directory: str, filename: str):
+        self.directory = directory
+        self.filename = filename
+        self.rarity_rate = 1.0
+        # Appearance counter
+        self.counter = 0
+
+    def __str__(self):
+        return os.path.join(self.directory, self.filename)
+
+    def __repr__(self):
+        return self.__str__()
+
+    def as_name(self):
+        """File nome minus file extension"""
+        return self.filename.split('.')[0]
+
+    def full_path(self):
+        """Full path of the image"""
+        return os.path.join(BASE_DIR, self.directory, self.filename)
 
 
-def set_up():
-    num_files_list = []
-    m = 1
+class ImageResult:
+    """Hold Image result data"""
+    # List of image source
+    img_sources: List[ImageSource]
 
-    for dir in ['images', 'metadata']:
-        os.makedirs(os.path.join(base_dir, 'output', dir), exist_ok=True)
+    def __init__(self, number: int,  img_sources: List[ImageSource]):
+        self.number = number
+        self.metadata = {}
+        self.rarity = 0.0
+        self.img_sources = img_sources
+        self.buffer = None
 
-    for folder in CONFIG['folders']:
-        current_path = os.path.join(base_dir, folder)
-        os.makedirs(current_path, exist_ok=True)
+    def __str__(self):
+        return self.filename
 
-        num_files = len(os.listdir(current_path))
-        for ignored in IGNORED:
-            if os.path.exists(os.path.join(current_path, ignored)):
-                num_files -= 1
-        if num_files <= 0:
-            # Prevent num_files <= 0
-            num_files = 1
-        m *= num_files
-        num_files_list.append(num_files)
-        print(f'{current_path} contains {num_files} file(s)')
+    def __repr__(self):
+        return self.__str__()
 
-    possible_combinations = 1
-    for i in num_files_list:
-        possible_combinations *= i
+    @property
+    def filename(self):
+        return f'{self.number}.png'
 
-    if m == 0:
-        cprint('Please make sure that all folders contain images', 'red')
-        return False
-    # If the 'amount' value is higher than the number of possible combinations
-    # ...then this can't be done
+    @property
+    def upload_path(self):
+        return f'images/{self.filename}.png'
 
-    if CONFIG['amount'] > m:
-        shutil.rmtree('output')
-        cprint(f"Can't make {CONFIG['amount']} images, there are only {possible_combinations} possible combinations",
-               'red')
-        return False
+    @property
+    def json_upload_path(self):
+        return f'json/{self.filename}.json'
 
-    return True
+    def full_path(self):
+        """Full path of the image"""
+        return os.path.join(BASE_DIR, 'output', 'images', self.filename)
 
-
-def set_list():
-    # p = list(product(*[os.listdir(os.path.join(base_dir, folder))
-    #                    for folder in CONFIG['folders']]))
-    # Image: counter
-    image_counter = {}
-    p = []
-    for folder in CONFIG['folders']:
-        file_list = []
-        for file in os.listdir(os.path.join(base_dir, folder)):
-            if file not in IGNORED:
-                file_list.append(file)
-                # Image name, minus file extensions (e.g. png)
-                img_name = file.split('.')[0]
-                image_counter[img_name] = 0
-        p.append(file_list)
-    p = list(product(*p))
-
-    name = CONFIG['project_name']
-
-    image_files = []
-    images_data = {}
-    for num in range(CONFIG['amount']):
-        idx = random.randint(0, len(p) - 1)
-        item = [[f, p[idx][i]] for i, f in enumerate(CONFIG['folders'])]
-        for i in item:
-            # Image name, minus file extensions (e.g. png)
-            key = i[-1].split('.')[0]
-            image_counter[key] += 1
-        img_metadata, buffer = create_image(item, num)
-
-        img_metadata['num'] = num
-        image_files.append(('file', (
-            'images/' + img_metadata['name'] + '.png',
-            buffer.getvalue()
-        )))
-        images_data[img_metadata['name']] = img_metadata
-        p.pop(idx)
-
-    # Count all image rarities
-    cprint('\nImage rarity', attrs=['bold'])
-    counter = 0
-    sum_perc = 0.0
-    for img, num_count in image_counter.items():
-        # if counter == 0:
-        perc = round((num_count / CONFIG['amount']) * 100, 2)
-        sum_perc += perc
-        counter += 1
-        cprint(f'{img:20}: {perc:02}%')
-
-    # Count mean of rarity with 2 decimal point
-    img_rarity_perc = round(sum_perc / counter, 2)
-    cprint(f'Average rarity: {img_rarity_perc}\n', attrs=['bold'])
-
-    # Update images output metadata
-    # Mean of Images Rarity for Image result
-    for img_name, desc in images_data.items():
-        sum_num_count = 0
-        attributes = desc['attributes']
-        for attr in attributes:
-            num_count = image_counter[attr['value']]
-            sum_num_count += num_count
-        
-        mean_perc_rarity = round(
-            sum_num_count / len(attributes) / CONFIG['amount'] * 100, 2
+    @property
+    def json_full_path(self):
+        """Full path of the image"""
+        return os.path.join(
+            BASE_DIR, 'output', 'metadata', f'{self.number}.json'
         )
-        # Add rarity value here
-        images_data[img_name]['rarity'] = mean_perc_rarity
 
-    description = CONFIG['description']
-    count, response = 0, None
-    while count <= 3:
-        response = upload(image_files, metadata={
-            'keyvalues': images_data,
-            'name': name,
-            'description': description
-        }, desc='Images')
-        if response is None:
-            # Keep trying
+    def save(self):
+        """
+        Save the image result
+        and return Buffer to be sent to API
+        """
+        new_image = None
+        attributes = []
+        for img_src in self.img_sources:
+            with Image.open(img_src.full_path()) as img:
+                if new_image is None:
+                    new_image = Image.new(mode='RGBA', size=img.size)
+                new_image.paste(img, (0, 0), mask=img)
+
+            trait_value = ' '.join(img_src.directory.split(' ')[:-1]).capitalize()
+            attribute = {
+                'trait_value': trait_value,
+                'value': os.path.splitext(img_src.filename)[0]
+            }
+            attributes.append(attribute)
+
+        # Save to file
+        new_image.save(self.full_path())
+        # Add metadata: attributes
+        self.metadata.update({'attributes': attributes})
+
+        # Buffer of current file that to be uploaded to API
+        self.buffer = BytesIO()
+        new_image.save(self.buffer, format='PNG')
+        return attributes
+
+    def save_metadata(self):
+        with open(self.json_full_path, 'w') as fd:
+            json.dump(self.metadata, fd, ensure_ascii=False, indent=4)
+
+
+class Main:
+    def __init__(self):
+        self.http = Session()
+        self.config = Config(os.path.join(BASE_DIR, 'config.json'))
+
+        # List of image sources `ImageSource`
+        self.img_sources = []
+        # List of image result `ImageResult`
+        self.img_results = []
+        self.sum_of_rarity_rate = 0.0
+
+        self.products = None
+        # Dict of product and its rarity rate
+        self.product_dict = {}
+
+    def setup(self):
+        # Result folders
+        for folder in ['images', 'metadata']:
+            os.makedirs(
+                os.path.join(BASE_DIR, 'output', folder), exist_ok=True
+            )
+
+        # Count source file numbers
+        possible_combinations = 1
+        folder_files = []
+        custom_rarity_rage = self.config.get('rarity')
+        for folder in self.config['folders']:
+            current_path = os.path.join(BASE_DIR, folder)
+            os.makedirs(current_path, exist_ok=True)
+
+            ignored = self.config['ignore'] or []
+
+            num_files = 0
+            file_list = []
+            for filename in os.listdir(current_path):
+                if filename in ignored:
+                    # Skip ignored files
+                    continue
+                num_files += 1
+
+                img_source = ImageSource(directory=folder, filename=filename)
+                # Set image source rarity rate (default 1)
+                cur_file_rarity = custom_rarity_rage.get(str(img_source))
+                if cur_file_rarity == 0:
+                    # current image rarity is 0, skipping
+                    cprint(f'  Skipping 0% rarity image: {img_source}', 'red')
+                    continue
+                if cur_file_rarity is not None:
+                    img_source.rarity_rate = float(cur_file_rarity)
+                    self.sum_of_rarity_rate += float(cur_file_rarity)
+                else:
+                    img_source.rarity_rate = 1.0
+                    self.sum_of_rarity_rate += 1.0
+
+                self.img_sources.append(img_source)
+                file_list.append(img_source)
+
+            folder_files.append(file_list)
+            possible_combinations *= num_files
+            cprint(f'{current_path} contains {num_files} file(s)')
+
+        if possible_combinations <= 0:
+            cprint('Please make sure that all folders contain images', 'red')
+            return False
+
+        amount = self.config['amount']
+        if amount > possible_combinations:
+            shutil.rmtree('output')
+            cprint(f"Can't make {amount} images, "
+                   f"there are only {possible_combinations} possible combinations",
+                   'red')
+            return False
+
+        # Image source file combinations
+        self.products = list(product(*folder_files))
+        self.prepare_randomization()
+
+        cprint(f"Successfully created {amount} images", 'green')
+        return True
+
+    def prepare_randomization(self):
+        """Preparation actions before `.set_list`"""
+        counted_list = []
+        cprint('\nImage rarity', 'magenta', attrs=['bold'])
+
+        for p in self.products:
+            rarity_rates = 0
+            for item in p:
+                rarity_rates += item.rarity_rate
+                if item not in counted_list:
+                    counted_list.append(item)
+                    self.sum_of_rarity_rate += item.rarity_rate
+            self.product_dict[p] = rarity_rates
+
+        # Count mean of rarity rates
+        sum_perc = 0.0
+        for counted in counted_list:
+            perc = round(counted.rarity_rate / self.sum_of_rarity_rate * 100, 2)
+            cprint(f'  {counted.filename:20}: {perc:02} %')
+            sum_perc += perc
+        img_rarity_perc = round(sum_perc / len(counted_list), 2)
+        cprint(f'Average : {img_rarity_perc} %\n', 'magenta', attrs=['bold'])
+
+    def get_random(self):
+        """Get random product"""
+        sum_of_rarity = sum(self.product_dict.values())
+        rand_score = random.randint(0, sum_of_rarity)
+        score_count = 0
+        choice = None
+        for p, score in self.product_dict.items():
+            score_count += score
+            if rand_score <= score_count:
+                choice = p
+                break
+        product_idx = self.products.index(choice)
+
+        # Remove choice from `products` and `product_dict`
+        self.products.pop(product_idx)
+        del self.product_dict[choice]
+
+        # Return product and its rarity rates
+        rarity_rate = sum([c.rarity_rate for c in choice]) \
+                      / self.sum_of_rarity_rate * 100
+        return choice, round(rarity_rate, 2)
+
+    def set_list(self):
+        for num in range(self.config['amount']):
+            choice, rarity_rate = self.get_random()
+            img_result = ImageResult(num, choice)
+            # save to file
+            attributes = img_result.save()
+            img_result.save_metadata()
+
+            # Add metadata: description and name
+            metadata = {
+                'description': self.config['description'],
+                'name': f'{self.config["project_name"]}#{img_result.number}',
+                'rarity': rarity_rate,
+                'attributes': attributes
+            }
+            img_result.metadata.update(metadata)
+            self.img_results.append(img_result)
+
+    def upload_all(self):
+        cprint('\nUploading...\n', attrs=['bold'])
+
+        image_files = []
+        image_data = {}
+        for img in self.img_results:
+            image_files.append(('file', (
+                f'images/{img.upload_path}', img.buffer.getvalue()
+            )))
+            img_name = f'{self.config["project_name"]}#{img.number}'
+            image_data[img_name] = img.metadata
+
+        metadata = {
+            'name': self.config['project_name'],
+            'description': self.config['description'],
+            'keyvalues': image_data,
+        }
+
+        # images upload, retry 3 times
+        count, response = 0, None
+        while count <= 3:
+            response = self.upload_files(image_files, metadata)
             count += 1
-        break
-    if count >= 3 or response is None:
-        cprint('Images upload failed', 'red')
-        return
-    else:
+            if response is not None:
+                break
+        if count >= 3 or response is None:
+            cprint('Images upload failed', 'red')
+            return
         cprint(f'Images upload response: {json.dumps(response, indent=2)}',
                'green')
 
-    ipfs_hash = response['IpfsHash']
-    # the https version
-    # ipfs_url = f'https://gateway.pinata.cloud/ipfs/{ipfs_hash}'
-    ipfs_url = f'ipfs://{ipfs_hash}'
-    timestamp = datetime.strptime(response['Timestamp'], DATETIME_FMT)
+        ipfs_hash = response['IpfsHash']
+        # the https version: f'https://gateway.pinata.cloud/ipfs/{ipfs_hash}'
+        ipfs_url = f'ipfs://{ipfs_hash}'
+        timestamp = datetime.strptime(response['Timestamp'], DATETIME_FMT)
+        date = int(timestamp.timestamp() * 1000)
 
-    json_files = []
-    for img_name, desc in images_data.items():
-        # Encoded URL of the image
-        desc['image'] = ipfs_url + '/' + quote(img_name + '.png')
-        desc['date'] = int(timestamp.timestamp() * 1000)
-        # Image rarity
+        json_files = []
+        for img in self.img_results:
+            img.metadata.update({
+                'image': f'{ipfs_url}/' + up.quote(img.filename),
+                'date': date
+            })
+            img.save_metadata()
+            json_files.append(('file', (
+                img.json_upload_path, open(img.json_full_path, 'rb')
+            )))
 
-        img_num = desc["num"]
-        desc_copy = desc.copy()
-        del desc_copy['num']
-
-        json_file = os.path.join(base_dir, 'output', 'metadata', f'{img_num}.json')
-        with open(json_file, 'w') as outfile:
-            json.dump(desc_copy, outfile, ensure_ascii=False, indent=4)
-        json_files.append(
-            ('file', (f'json/{img_num}.json', open(json_file, 'rb')))
-        )
-    json_metadata = {
-        'name': f'{name} metadata',
-        'description': description
-    }
-    # Upload the JSON, keep trying 3 times
-    count, response = 0, None
-    while count <= 3:
-        response = upload(json_files, json_metadata, 'JSON')
-        if response is None:
-            # Keep trying
+        json_metadata = {
+            'name': f'{self.config["project_name"]} metadata',
+            'description': self.config['description'],
+        }
+        # images upload, retry 3 times
+        count, response = 0, None
+        while count <= 3:
+            response = self.upload_files(json_files, json_metadata)
+            if response is not None:
+                break
             count += 1
-        break
-
-    if count >= 3 or response is None:
-        cprint('JSON upload failed', 'red')
-        return
-    else:
+        if count >= 3 or response is None:
+            cprint('JSON upload failed', 'red')
+            return
         cprint(f'JSON upload response: {json.dumps(response, indent=2)}',
                'green')
 
-
-def create_image(image_items, num):
-    attributes = []
-    new_image = None
-    for folder, image in sorted(image_items):
-        with Image.open(os.path.join(base_dir, folder, image)) as img:
-            if new_image is None:
-                new_image = Image.new(mode='RGBA', size=img.size)
-            new_image.paste(img, (0, 0), mask=img)
-            attr_data = {
-                'trait_value': ' '.join(folder.split(' ')[:-1]).capitalize(),
-                'value': os.path.splitext(image)[0]
-            }
-            attributes.append(attr_data)
-
-    new_image.save(os.path.join(base_dir, 'output', 'images', f'{num}.png'))
-    print(f'Image: {num}')
-
-    img_metadata = {
-        'description': CONFIG['description'],
-        'name': f'{CONFIG["project_name"]}#{num}',
-        'attributes': attributes
-    }
-
-    json_file_name = os.path.join(base_dir, 'output', 'metadata', f'{num}.json')
-    with open(json_file_name, 'w') as outfile:
-        json.dump(img_metadata, outfile, ensure_ascii=False, indent=4)
-
-    buffer = BytesIO()
-    new_image.save(buffer, format='PNG')
-    return img_metadata, buffer
-
-
-def upload(file_list, metadata, desc=None):
-    """Upload files and its metadata"""
-
-    cprint(f'Uploading {desc}', 'green')
-    try:
-        resp = http.post(
-            UPLOAD_URL,
-            files=file_list,
-            headers=HEADERS,
-            json={'pinataMetadata': json.dumps(metadata)},
-            timeout=100.0
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        return result
-    except HTTPError as exc:
+    def upload_files(self, files, metadata):
         try:
-            cprint(f'HTTP ERROR: {exc.response.json()}', 'red')
-        except:
-            cprint(f'HTTP ERROR: {exc}', 'red')
-    except Exception as exc:
-        cprint(f'ERROR: {exc}', 'red')
+            resp = self.http.post(
+                UPLOAD_URL,
+                headers={
+                    'Authorization': f'Bearer {self.config["api_key"]}',
+                    'User-Agent': UA_HEADER
+                },
+                files=files,
+                json={'pinataMetadata': json.dumps(metadata)},
+                timeout=500,
+            )
+            resp.raise_for_status()
+            response = resp.json()
+            return response
+        except HTTPError as exc:
+            try:
+                cprint(f'HTTP ERROR: {exc.response.json()}', 'red')
+            except:
+                cprint(f'HTTP ERROR: {exc}', 'red')
+        except Exception as exc:
+            cprint(f'ERROR: {exc}', 'red')
+
+    def manual_upload_all(self):
+        cprint('\nManual Upload...', 'green', attrs=['bold'])
+
+        cprint('Metadata', 'green')
+        ipfs_hash = input('IpfsHash: ')
+        timestamp = input('Timestamp: ') or None
+
+        # the https version: f'https://gateway.pinata.cloud/ipfs/{ipfs_hash}'
+        ipfs_url = f'ipfs://{ipfs_hash}'
+        if timestamp is not None:
+            timestamp = datetime.strptime(timestamp, DATETIME_FMT)
+            date = int(timestamp.timestamp() * 1000)
+        else:
+            date = None
+
+        for img in self.img_results:
+            img.metadata['image'] = f'{ipfs_url}/' + up.quote(img.filename)
+            if date is not None:
+                img.metadata['date'] = date
+            img.save_metadata()
+
+        cprint(f'JSON metadata is updated...', 'green')
+
+    def save_gif(self):
+        assert self.img_results, 'Result images is not saved'
+
+        frames = []
+        # for img in self.img_results:
+        for img in self.img_results[:self.config['profile_images']]:
+            frames.append(Image.open(img.full_path()))
+
+        frames[0].save(
+            os.path.join(BASE_DIR, 'output', 'profile.gif'),
+            format='GIF',
+            append_images=frames[1:],
+            save_all=True, duration=230, loop=0
+        )
 
 
-def profile_picture_gif():
-    frames, images = ([] for i in range(2))
-    for image in os.listdir(os.path.join(base_dir, 'output', 'images'))[:CONFIG['profile_images']]:
-        images.append(os.path.join(base_dir, 'output', 'images', image))
+def main():
+    m = Main()
+    m.setup()
+    m.set_list()
 
-    for frame in images:
-        new_frame = Image.open(frame)
-        frames.append(new_frame)
+    ## API upload
+    m.upload_all()
 
-    frames[0].save(os.path.join(base_dir, 'output', 'profile.gif'), format='GIF', append_images=frames[1:],
-                   save_all=True, duration=230, loop=0)
+    ## For manual files upload
+    #m.manual_upload_all()
+
+    m.save_gif()
 
 
 if __name__ == '__main__':
-    if set_up():
-        set_list()
-        profile_picture_gif()
+    main()
