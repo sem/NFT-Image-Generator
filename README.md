@@ -39,8 +39,10 @@ NFT-Image-Generator/
 ```
 
 ## Features
-- [x] Generates metadata for direct use on [OpenSea](https://docs.opensea.io/docs/metadata-standards).
-- [x] Automatically uploads images and metadata to [Pinata](https://www.pinata.cloud).
-- [x] Ensures that no duplicate images will appear in the collection.
-- [x] Creates a .GIF profile picture for your collection.
-- [x] Gives each image a rarity value. 
+- [x] Generate metadata for direct use on [OpenSea](https://docs.opensea.io/docs/metadata-standards).
+  - [x] Being able to update the image URL after the metadata is created.
+- [x] Automatically upload images and metadata to [Pinata](https://www.pinata.cloud).
+- [x] Ensure that no duplicate images will appear in the collection.
+- [x] Create a .GIF profile picture for your collection.
+- [x] Give each image a rarity value. 
+  - [x] Influence rarity by giving layers a weight.
