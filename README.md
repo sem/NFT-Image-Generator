@@ -9,7 +9,7 @@ Utility for creating a generative art collection from supplied image layers, esp
 </details>
 
 ## Prerequisites
-1. Clone the repository by running ```git clone https://github.com/sem/NFT-Image-Generator```.
+1. Clone the repository by running ```https://github.com/sem/NFT-Image-Generator.git```.
 2. Install the dependencies ```pip3 install -r requirements.txt```.
 
 ## How to use
