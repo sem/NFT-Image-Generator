@@ -113,7 +113,7 @@ class ImageResult:
         new_image = None
         attributes = []
         for img_src in self.img_sources:
-            with Image.open(img_src.full_path()) as img:
+            with Image.open(img_src.full_path()).convert('RGBA') as img:
                 if new_image is None:
                     new_image = Image.new(mode='RGBA', size=img.size)
                 new_image.paste(img, (0, 0), mask=img)
