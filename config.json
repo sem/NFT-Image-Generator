@@ -19,9 +19,9 @@
         ".DS_Store"
     ],
     
-    "rarity": [
+    "rarity": {
         "3 eyes/normal_eyes.png": 10.0,
         "2 body/male.png": 0.5,
         "1 background/red.png": 140.0
-    ]
+    }
 }
